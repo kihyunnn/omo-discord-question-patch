@@ -7,6 +7,12 @@ When an agent stops and asks a question, you usually have to walk to the machine
 terminal. This patch posts that question to chat as buttons, so you answer from your phone and the
 session keeps going.
 
+![A real Discord message: a blocked agent's question with answer buttons](assets/discord-buttons.png)
+
+*A real capture, not a mockup — a blocked session's question posted to Discord with its answer
+buttons. The example question is in Korean; the buttons are "home server", "remote host", and
+"write your own".*
+
 ```
 ┌─ the agent's terminal ─────────────┐        ┌─ your phone ──────────────────────┐
 │                                    │        │ Which environment should I        │
