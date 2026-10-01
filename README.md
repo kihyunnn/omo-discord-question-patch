@@ -7,6 +7,24 @@ When an agent stops and asks a question, you usually have to walk to the machine
 terminal. This patch posts that question to chat as buttons, so you answer from your phone and the
 session keeps going.
 
+```
+┌─ the agent's terminal ─────────────┐        ┌─ your phone ──────────────────────┐
+│                                    │        │ Which environment should I        │
+│  ? Which environment should I      │        │ deploy to?                        │
+│    deploy to?                      │        │                                   │
+│  ❯ 1. staging                      │  ───▶  │ ┌───────────────────────────────┐ │
+│    2. production                   │        │ │ staging                       │ │
+│    3. a preview branch             │        │ ├───────────────────────────────┤ │
+│                                    │        │ │ production                    │ │
+│  (the session is blocked, waiting) │        │ ├───────────────────────────────┤ │
+│                                    │        │ │ a preview branch              │ │
+│                                    │        │ ├───────────────────────────────┤ │
+│                                    │        │ │ ✍ Write your own              │ │
+│                                    │        │ └───────────────────────────────┘ │
+└────────────────────────────────────┘        └───────────────────────────────────┘
+         one press injects "production" back into the waiting prompt
+```
+
 This repo is two things:
 
 | | What it is | Where |
@@ -30,36 +48,102 @@ If you do not have that, this is a well-documented design document.
 
 ```sh
 bun install
-bun test          # the parser's regression suite
+bun test                            # the parser's regression suite
 bun run typecheck
+bun run examples/render-example.ts  # regenerates the worked example below
 ```
 
-## The parser
+## Worked example
 
-```ts
-import { parseSessionQuestionCalls, questionKeyboard, parseQuestionCallback, questionChoice } from "./src/questions.ts";
+Everything in this section is printed by
+[`examples/render-example.ts`](examples/render-example.ts), which runs the shipped parser — the
+button rows are the parser's real output, not hand-written documentation.
 
-const parsed = parseSessionQuestionCalls(sessionLogTail);      // newest tool call only
-const rows = questionKeyboard(parsed, "q");                    // Button[][] for your platform
-const press = parseQuestionCallback("q|0|1", "q");             // which question, which option
-const choice = questionChoice(parsed, press.questionIndex, press.optionIndex);
+### 1. What the agent's terminal shows
+
+The agent calls `ask_user_question` and the session blocks. Its pane renders the question with a
+cursor glyph on the focused choice:
+
+```
+? Which environment should I deploy to?
+❯ 1. staging
+  2. production
+  3. a preview branch
 ```
 
-Button labels are English by default and can be localized without touching the parser:
+That glyph is why the parser allows a leading marker: an option regex that does not would silently
+drop the first choice.
 
-```ts
-// labels: KeyboardLabels — swap in any locale's strings
-questionKeyboard(parsed, "q", { confirm: "...", write: "..." });
+### 2. Where the question really comes from
+
+The pane text is only the **fallback**. The primary source is the session log, which records the
+tool call itself:
+
+```json
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"ask_user_question",
+ "arguments":{"questions":[{"question":"Which environment should I deploy to?",
+ "options":[{"label":"staging"},{"label":"production"},{"label":"a preview branch"}]}]}}]}}
 ```
 
-Two entry points matter:
+The parser reads the **newest** such call in the log tail — never all of them, or an already
+answered question is reposted next to the live one.
 
-- `parseSessionQuestionCalls(log)` — reads the **newest** `ask_user_question` / `request_user_input`
-  call from a session-log tail. Earlier calls were already answered; merging them back reposts an
-  answered question next to the live one, and its buttons write to the wrong index.
-- `parsePaneQuestions(text)` — fallback for the pane's rendered text. The focused option is drawn
-  with a cursor glyph (`→ 1. Left`); the option regex allows that marker, because dropping it loses
-  the first choice.
+### 3. What gets posted
+
+`questionKeyboard()` turns the parsed question into button rows:
+
+```
+message 1:
+[ staging ]
+[ production ]
+[ a preview branch ]
+[ ✍ Write your own ]
+```
+
+Pressing `production` injects that choice into the waiting prompt, and the message is edited to show
+the answer with the buttons disabled.
+
+### 4. A multi-question set is split, never truncated
+
+Three questions produce 9 rows. Discord allows at most **5 action rows per message**, so the set is
+posted as two messages:
+
+```
+1. Deploy to which environment?
+2. Run the migrations first?
+3. Notify the team?
+
+message 1:
+[ staging ]
+[ production ]
+[ ✍ Write your own ]
+[ yes ]
+[ no ]
+
+message 2:
+[ ✍ Write your own ]
+[ yes ]
+[ no ]
+[ ✍ Write your own ]
+```
+
+Truncating to the first 5 rows instead would leave the owner answering one question and believing
+they answered all three — a bug that actually shipped once.
+
+## How this was handled before the patch
+
+The buttons were not the first version. Before them, a blocked session produced a **notification
+only** — no buttons, no way to answer from chat:
+
+- the owner got a message saying the session had stopped at an approval/question screen, naming the
+  pane and telling them to go read it and answer there, or
+- the runtime pasted the same note into its own main session, which then had to relay it.
+
+Answering meant opening the pane and typing, which defeats the point of an always-on assistant: the
+owner had to be at a terminal to unblock a session. The button patch replaced that dead end with an
+answerable message, and kept the old notification as the fallback for the one case it cannot handle
+— a blocked pane whose question could not be parsed yet (the log write can lag the blocked state by
+a tick).
 
 ## Rules the code enforces (each was a production bug)
 
@@ -71,6 +155,23 @@ Two entry points matter:
 - **Cursor-marked first option kept** — the focused choice must not vanish.
 - **Non-ASCII safe** — a non-English question survives intact, and a localized question prefix is
   matched alongside `Question:`.
+
+## Can I use this to patch my own runtime?
+
+The parser is drop-in; the rest is glue you write from the spec. Concretely:
+
+- **`src/questions.ts` is the same logic the reference runtime runs.** It is that file with the
+  branding removed, the one type-only import inlined, and the keyboard labels made configurable. So
+  the parsing behavior in your runtime matches the tests here.
+- **What this repo does not ship** is everything that touches the outside world: the watcher tick
+  that finds blocked panes, the interaction handler that must acknowledge within Discord's 3-second
+  window, the pane injection (`send-text` + `send-keys enter`), the durable pending-question store,
+  and the blocked-detection prerequisite. [`SETUP-PROMPT.md`](SETUP-PROMPT.md) specifies all of them,
+  including the traps (the synchronous log read that blows the ack window, the per-question disable
+  flag that closes every button on a partial answer, the gateway that rewrites `event.type`).
+- **In practice**: if you already run a pane runtime plus a chat bot, you can copy `src/questions.ts`
+  and follow the spec to add the watcher and the handler. If you do not, treat this as a design
+  document for building one.
 
 ## Cross-platform notes
 
