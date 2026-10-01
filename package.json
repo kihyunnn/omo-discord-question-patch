@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Post a blocked coding agent's ask_user_question as Discord/Telegram buttons and inject the answer back into the pane",
   "scripts": {
+    "start": "bun run src/main.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

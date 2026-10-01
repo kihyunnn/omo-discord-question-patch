@@ -25,30 +25,65 @@ session keeps going.
          one press injects "production" back into the waiting prompt
 ```
 
-This repo is two things:
+This repo is three things:
 
 | | What it is | Where |
 |---|---|---|
-| **Spec** | A setup prompt you hand to a coding agent that already runs a pane runtime and a chat bot. It records every bug this feature hit in production, so the next implementation does not rediscover them. | [`SETUP-PROMPT.md`](SETUP-PROMPT.md) |
-| **Reference implementation** | The pure parsing half: read the question, dedupe it, lay out buttons within each platform's limits, and decode a button press. No framework, no I/O. | [`src/questions.ts`](src/questions.ts) |
+| **Runtime** | A working, Herdr-only watcher: blocked pane → chat buttons → answer injected back. | [`src/`](src/) |
+| **Spec** | The setup prompt you hand to a coding agent, recording every bug this feature hit in production. | [`SETUP-PROMPT.md`](SETUP-PROMPT.md) |
+| **Parser** | The pure parsing half on its own: read the question, dedupe it, lay out buttons, decode a press. | [`src/questions.ts`](src/questions.ts) |
 
 ## Honest scope
 
-This is **not** a turnkey tool. It is a spec plus the parser. To use it you need:
+This is **Herdr-only**. It talks to [Herdr](https://herdr.dev) for everything pane-related —
+`herdr agent list` gives the blocked/idle state, `herdr agent read` gives the pane text, and
+`herdr pane send-text` + `send-keys enter` inject the answer. There is no abstraction over other pane
+runtimes; if you do not run Herdr, use [`SETUP-PROMPT.md`](SETUP-PROMPT.md) as the spec instead.
 
-- a pane runtime that can report an agent as `blocked` and paste text back into that pane
-  (the reference build uses [Herdr](https://herdr.dev); any runtime with a "send text + Enter"
-  primitive works),
-- a Discord bot or Telegram bot with a token, and
-- a small watcher that ties the two together (the spec describes it).
+You still need a Discord bot or Telegram bot with a token, and an agent (omo or another one whose
+session log records an `ask_user_question` / `request_user_input` tool call) running inside a Herdr
+pane.
 
-If you do not have that, this is a well-documented design document.
+## Run it
+
+```sh
+bun install
+cp config.example.json ~/.config/omo-question-patch/config.json   # then fill it in
+bun run src/main.ts
+```
+
+Config comes from that file and/or the environment (the environment wins, so a token can stay out of
+the file): `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID`, `DISCORD_OWNER_ID`, `DISCORD_PUBLIC_KEY`,
+`DISCORD_PORT`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_OWNER_ID`, `HERDR_BIN`,
+`QUESTION_PATCH_INTERVAL_MS`, `QUESTION_PATCH_STATE`, `QUESTION_PATCH_CONFIG`.
+
+Inbound presses arrive two ways:
+
+- **Discord** — an interactions endpoint (`POST /discord/interactions`) on `discord.port`, verified
+  against the app's Ed25519 public key. Point the app's Interactions URL at it (a tunnel or reverse
+  proxy is usually needed). The handler acknowledges inside Discord's 3-second window (type 6) and
+  does the injection after, so the ack is never spent on the answer work.
+- **Telegram** — long polling; no public URL needed.
+
+### What one tick does
+
+1. `herdr agent list` — panes whose status is `blocked`.
+2. Read the pane's session log (found from its cwd, tail only) for the **newest** question call;
+   fall back to the rendered pane text.
+3. Post the question as chat buttons (Discord components, or a Telegram inline keyboard).
+4. A pane that is working again has its question invalidated.
+5. On a press: verify the presser is the owner, inject the answer with `send-text` + `send-keys
+   enter`, and edit the message. A multi-question set stays open until the last answer; only the
+   answered question's buttons are disabled.
+
+Pending questions are stored in SQLite, so a restart keeps the buttons usable. Every Herdr call is
+bounded by a timeout, and the log read is a positional tail read, never a whole-file read.
 
 ## Install and verify
 
 ```sh
 bun install
-bun test                            # the parser's regression suite
+bun test                            # parser and runtime regression suites
 bun run typecheck
 bun run examples/render-example.ts  # regenerates the worked example below
 ```
@@ -158,22 +193,18 @@ a tick).
 
 ## Can I use this to patch my own runtime?
 
-The parser is drop-in; the rest is glue you write from the spec. Concretely:
+The runtime here is Herdr-only, so if you run Herdr you can run it as-is. Otherwise:
 
 - **`src/questions.ts` is the parser the reference runtime runs.** It is that file with the
   branding removed, the one type-only import inlined, and the keyboard labels made configurable, so
   the parsing behavior — including the multi-select rule — matches. Both repos carry a test that
   pins the multi-select rule (`multi` / `여러` / `복수`, never the English word "select", which
   appears on single-select prompts too).
-- **What this repo does not ship** is everything that touches the outside world: the watcher tick
-  that finds blocked panes, the interaction handler that must acknowledge within Discord's 3-second
-  window, the pane injection (`send-text` + `send-keys enter`), the durable pending-question store,
-  and the blocked-detection prerequisite. [`SETUP-PROMPT.md`](SETUP-PROMPT.md) specifies all of them,
-  including the traps (the synchronous log read that blows the ack window, the per-question disable
-  flag that closes every button on a partial answer, the gateway that rewrites `event.type`).
-- **In practice**: if you already run a pane runtime plus a chat bot, you can copy `src/questions.ts`
-  and follow the spec to add the watcher and the handler. If you do not, treat this as a design
-  document for building one.
+- **Everything else in `src/` is Herdr-specific glue** you can port or replace: the CLI wrapper,
+  the cwd → session-log lookup, the durable pending-question store, the chat adapters, and the tick.
+  [`SETUP-PROMPT.md`](SETUP-PROMPT.md) specifies all of it, including the traps (the synchronous log
+  read that blows the ack window, the per-question disable flag that closes every button on a
+  partial answer, the gateway that rewrites `event.type`).
 
 ## Cross-platform notes
 

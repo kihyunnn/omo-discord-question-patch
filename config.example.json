@@ -1,0 +1,18 @@
+{
+  "herdr_bin": "herdr",
+  "interval_ms": 10000,
+  "state_file": "~/.local/state/omo-question-patch/state.sqlite",
+  "discord": {
+    "token": "PASTE_BOT_TOKEN_OR_USE_DISCORD_BOT_TOKEN",
+    "channel_id": "CHANNEL_OR_THREAD_ID",
+    "owner_id": "YOUR_DISCORD_USER_ID",
+    "public_key": "YOUR_APP_ED25519_PUBLIC_KEY",
+    "port": 8787
+  },
+  "telegram": {
+    "token": "PASTE_BOT_TOKEN_OR_USE_TELEGRAM_BOT_TOKEN",
+    "chat_id": "CHAT_ID",
+    "owner_id": "YOUR_TELEGRAM_USER_ID",
+    "thread_id": "OPTIONAL_TOPIC_ID"
+  }
+}
