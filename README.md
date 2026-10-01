@@ -48,7 +48,8 @@ const choice = questionChoice(parsed, press.questionIndex, press.optionIndex);
 Button labels are English by default and can be localized without touching the parser:
 
 ```ts
-questionKeyboard(parsed, "q", { confirm: "선택 완료", write: "✍ 직접 쓰기" });
+// labels: KeyboardLabels — swap in any locale's strings
+questionKeyboard(parsed, "q", { confirm: "...", write: "..." });
 ```
 
 Two entry points matter:
@@ -68,8 +69,8 @@ Two entry points matter:
   into more messages instead of silently dropping choices.
 - **CRLF-tolerant** — a Windows-written log tail parses identically to LF.
 - **Cursor-marked first option kept** — the focused choice must not vanish.
-- **Non-ASCII safe** — a Korean (or any non-English) question survives intact, and a localized
-  `질문:` prefix is matched alongside `Question:`.
+- **Non-ASCII safe** — a non-English question survives intact, and a localized question prefix is
+  matched alongside `Question:`.
 
 ## Cross-platform notes
 
