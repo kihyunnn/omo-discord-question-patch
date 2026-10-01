@@ -73,7 +73,7 @@ export function parsePaneQuestions(input: string): ParsedQuestions | null {
     const choice = line.match(OPTION);
     if (match && !choice) {
       if (current && current.options.length > 0) questions.push(current);
-      current = { text: clean(match[1]!).slice(0, 1000), options: [], multiSelect: /multi|select|여러|복수/i.test(line) };
+      current = { text: clean(match[1]!).slice(0, 1000), options: [], multiSelect: /multi|여러|복수/i.test(line) };
       continue;
     }
     if (choice && current) { const parsed = option(choice[1]!); if (parsed) current.options.push(parsed); continue; }

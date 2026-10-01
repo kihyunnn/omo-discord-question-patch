@@ -82,6 +82,20 @@ test("non-ASCII question text and Korean-labeled pane output are parsed as data"
   expect(questionKeyboard(parsed, "q").flat().map((b) => b.text)).toContain(DEFAULT_KEYBOARD_LABELS.write);
 });
 
+test("a single-select question that merely says 'select' is not treated as multi-select", () => {
+  // "select" means "choose" in English and appears on single-select prompts, so it is not a
+  // multi-select signal. Treating it as one added checkboxes and a "Done" button to plain questions.
+  const parsed = parsePaneQuestions("Question: select the right answer\n1. A\n2. B\n")!;
+  expect(parsed.questions[0]!.multiSelect).toBe(false);
+  expect(questionKeyboard(parsed, "q").flat().map((button) => button.text)).toEqual(["A", "B", DEFAULT_KEYBOARD_LABELS.write]);
+});
+
+test("an explicit multi-select signal in the pane text is still detected", () => {
+  for (const text of ["Question: 여러 개를 고르세요", "Question: pick multiple", "Question: 복수 선택"]) {
+    expect(parsePaneQuestions(`${text}\n1. A\n2. B\n`)!.questions[0]!.multiSelect).toBe(true);
+  }
+});
+
 test("keyboard labels can be localized without touching the parser", () => {
   const parsed = parsePaneQuestions("Question: which way?\n1. left\n2. right\n")!;
   const labels = { confirm: "선택 완료", write: "✍ 직접 쓰기" };

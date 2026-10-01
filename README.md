@@ -160,9 +160,11 @@ a tick).
 
 The parser is drop-in; the rest is glue you write from the spec. Concretely:
 
-- **`src/questions.ts` is the same logic the reference runtime runs.** It is that file with the
-  branding removed, the one type-only import inlined, and the keyboard labels made configurable. So
-  the parsing behavior in your runtime matches the tests here.
+- **`src/questions.ts` is the parser the reference runtime runs.** It is that file with the
+  branding removed, the one type-only import inlined, and the keyboard labels made configurable, so
+  the parsing behavior — including the multi-select rule — matches. Both repos carry a test that
+  pins the multi-select rule (`multi` / `여러` / `복수`, never the English word "select", which
+  appears on single-select prompts too).
 - **What this repo does not ship** is everything that touches the outside world: the watcher tick
   that finds blocked panes, the interaction handler that must acknowledge within Discord's 3-second
   window, the pane injection (`send-text` + `send-keys enter`), the durable pending-question store,
