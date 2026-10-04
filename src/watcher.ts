@@ -41,6 +41,12 @@ export class QuestionWatcher {
 
   pendingCount(): number { return this.pending.size; }
 
+  // The pending question a chat message belongs to, by the id the platform gave it. The modal's custom
+  // id is `qwrite|<key>`, and the key is what a modal submit is matched back on.
+  pendingKey(input: { platform: "discord" | "telegram"; chatId: string; messageId: string }): string | null {
+    return this.byMessage.get(`${input.chatId}:${input.messageId}`) ?? null;
+  }
+
   // One tick. Returns how many questions were newly posted.
   async tick(): Promise<number> {
     const agents = await listAgents(this.deps.cli);

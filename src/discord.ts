@@ -46,6 +46,21 @@ export function chunkQuestionText(questions: PaneQuestion[], chunk: QuestionRow[
   return [...new Set(chunk.map((entry) => entry.questionIndex))].map((qi) => questions[qi]!.text).join("\n");
 }
 
+// The modal that "✍ Write your own" opens. Its `custom_id` (`qwrite|<key>`) is the only thing that can
+// identify the pending question on submit — a modal submit carries no `message`. The HTTP interactions
+// endpoint sends this body as the interaction response; `openModal` sends the same body through the
+// callback endpoint, so both paths cannot drift.
+export function modalPayload(customId: string, title: string, label: string): { type: 9; data: { custom_id: string; title: string; components: unknown[] } } {
+  return {
+    type: 9,
+    data: {
+      custom_id: customId,
+      title: title.slice(0, 45),
+      components: [{ type: 1, components: [{ type: 4, custom_id: "answer", label: label.slice(0, 45), style: 2, required: true, max_length: 2000 }] }],
+    },
+  };
+}
+
 export type DiscordQuestionPort = {
   sendQuestion(channelId: string, text: string, questions: PaneQuestion[], replyTo?: string): Promise<string[]>;
   editQuestion(channelId: string, messageId: string, text: string, questions: PaneQuestion[] | null, answered: Record<number, string>, chunkIndex: number): Promise<void>;
@@ -85,9 +100,6 @@ export function createDiscordPort(token: string, fetcher: typeof fetch = fetch):
       if (!response.ok) throw new Error(`discord editQuestion ${response.status}`);
     },
     ack: (id, token2, content) => callback(id, token2, content === undefined ? { type: 6 } : { type: 4, data: { content: content.slice(0, 2000), flags: 64 } }),
-    openModal: (id, token2, customId, title, label) => callback(id, token2, {
-      type: 9,
-      data: { custom_id: customId, title: title.slice(0, 45), components: [{ type: 1, components: [{ type: 4, custom_id: "answer", label: label.slice(0, 45), style: 2, required: true, max_length: 2000 }] }] },
-    }),
+    openModal: (id, token2, customId, title, label) => callback(id, token2, modalPayload(customId, title, label)),
   };
 }

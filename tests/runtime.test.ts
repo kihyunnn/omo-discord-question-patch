@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chunkQuestionRows, DISCORD_QUESTION_ROW_LIMIT, discordQuestionRows, DISCORD_OPTIONS_PER_ROW } from "../src/discord.ts";
+import { discordInteractionResult } from "../src/inbound.ts";
 import type { HerdrCli, HerdrResult } from "../src/herdr.ts";
 import { injectAnswer, pasteText, safeJsonFromCli } from "../src/herdr.ts";
 import { parsePaneQuestions, parseSessionQuestionCalls } from "../src/questions.ts";
@@ -131,6 +132,53 @@ test("a partial answer disables only the answered question and keeps the rest cl
   expect(first.every((button) => button.disabled === true)).toBe(true);
   expect(second.every((button) => button.disabled !== true)).toBe(true);
   expect(herdr.sent).toHaveLength(2);
+  rmSync(root, { recursive: true, force: true });
+  store.close();
+});
+
+test("the write button opens a modal and the typed answer lands in the pane", async () => {
+  // The "✍ Write your own" button used to do nothing: `openModal` existed on the Discord port but no
+  // caller wired it, so the press returned "answered" and no modal ever opened. The modal's custom id
+  // carries the pending key (`qwrite|<key>`), which is how the submit is matched back — a modal has no
+  // message of its own.
+  const cwd = "/srv/modal";
+  const root = tempRoot(cwd, "session-modal", `${questionCall("Deploy where?", ["staging", "production"])}\n`);
+  const store = new QuestionStore(":memory:");
+  const herdr = fakeHerdr({ agents: [{ pane_id: "wE:p9", agent_status: "blocked", status_since_unix_ms: 1, cwd }] });
+  const chat = fakeChat();
+  const watcher = new QuestionWatcher({ cli: herdr.cli, store, chat: chat.chat, origin: { platform: "discord", channelId: "chan" }, sessionRoot: root });
+  await watcher.tick();
+
+  // The write press opens the modal as the interaction response (a modal cannot be a deferred ack).
+  const opened = await discordInteractionResult({ interaction: { type: 3, id: "i1", token: "t", channel_id: "chan", member: { user: { id: "owner" } }, message: { id: "1", channel_id: "chan" }, data: { custom_id: "q|0|w", component_type: 2 } }, watcher, ownerId: "owner" });
+  expect(opened.status).toBe(200);
+  expect(opened.body).toMatchObject({ type: 9 });
+  const customId = (opened.body as { data: { custom_id: string } }).data.custom_id;
+  expect(customId).toBe("qwrite|wE:p9");
+
+  // The submit carries the typed answer; it is injected into the pane and the question closes.
+  const submitted = await discordInteractionResult({ interaction: { type: 5, id: "i2", token: "t", channel_id: "chan", member: { user: { id: "owner" } }, data: { custom_id: customId, components: [{ type: 1, components: [{ type: 4, custom_id: "answer", value: "  a custom branch  " }] }] } }, watcher, ownerId: "owner" });
+  expect(submitted.body).toMatchObject({ type: 6 });
+  await submitted.after?.();
+  expect(herdr.sent).toEqual([["send-text", "wE:p9", pasteText("a custom branch")], ["send-keys", "wE:p9", "enter"]]);
+  expect(chat.edits.at(-1)!.text).toContain("answered every question");
+  rmSync(root, { recursive: true, force: true });
+  store.close();
+});
+
+test("a normal option press still acknowledges and injects after the ack", async () => {
+  const cwd = "/srv/option";
+  const root = tempRoot(cwd, "session-opt", `${questionCall("Deploy where?", ["staging", "production"])}\n`);
+  const store = new QuestionStore(":memory:");
+  const herdr = fakeHerdr({ agents: [{ pane_id: "wE:p8", agent_status: "blocked", status_since_unix_ms: 1, cwd }] });
+  const chat = fakeChat();
+  const watcher = new QuestionWatcher({ cli: herdr.cli, store, chat: chat.chat, origin: { platform: "discord", channelId: "chan" }, sessionRoot: root });
+  await watcher.tick();
+  const pressed = await discordInteractionResult({ interaction: { type: 3, id: "i3", token: "t", channel_id: "chan", member: { user: { id: "owner" } }, message: { id: "1", channel_id: "chan" }, data: { custom_id: "q|0|0", component_type: 2 } }, watcher, ownerId: "owner" });
+  // A plain option press is a deferred ack (type 6), never a modal.
+  expect(pressed.body).toMatchObject({ type: 6 });
+  await pressed.after?.();
+  expect(herdr.sent).toEqual([["send-text", "wE:p8", pasteText("staging")], ["send-keys", "wE:p8", "enter"]]);
   rmSync(root, { recursive: true, force: true });
   store.close();
 });

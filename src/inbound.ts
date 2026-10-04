@@ -1,4 +1,6 @@
 import { createPublicKey, verify } from "node:crypto";
+import { modalPayload } from "./discord.ts";
+import { parseQuestionCallback } from "./questions.ts";
 import type { QuestionWatcher } from "./watcher.ts";
 
 // Discord signs every interaction with Ed25519 over (timestamp + raw body); without this check the
@@ -38,6 +40,41 @@ export function modalAnswer(components: unknown[] | undefined): string {
   try { return (JSON.parse(`"${match[1]}"`) as string).trim(); } catch { return ""; }
 }
 
+// One Discord interaction → the interaction response to send, plus any work to run after the ack.
+// Extracted from the HTTP handler so the button/modal wiring is testable without a live server.
+export type DiscordInteractionResult = { status: number; body: unknown; after?: () => Promise<unknown> };
+
+export async function discordInteractionResult(input: { interaction: DiscordInteraction; watcher: QuestionWatcher; ownerId: string }): Promise<DiscordInteractionResult> {
+  const { interaction, watcher, ownerId } = input;
+  if (interaction.type === 1) return { status: 200, body: { type: 1 } };
+  const author = interaction.member?.user?.id ?? interaction.user?.id ?? "";
+  const channelId = interaction.message?.channel_id ?? interaction.channel_id ?? "";
+  const messageId = interaction.message?.id ?? "";
+  const custom = interaction.data?.custom_id ?? "";
+
+  if (interaction.type === 5) {
+    // A modal submit carries the typed answer; the pending question is identified by the modal's custom
+    // id (`qwrite|<key>`), since the modal has no message of its own.
+    const key = custom.startsWith("qwrite|") ? custom.slice(7) : "";
+    const answer = modalAnswer(interaction.data?.components);
+    return { status: 200, body: { type: 6 }, after: () => watcher.pressTyped({ key, authorId: author, ownerId, answer }) };
+  }
+
+  if (isComponent(interaction.data) && custom.startsWith("q|")) {
+    if (parseQuestionCallback(custom, "q")?.write) {
+      // "✍ Write your own" opens the modal as THIS interaction's response — a modal cannot be a deferred
+      // ack. press() records which question the typed answer belongs to and does no I/O on this branch,
+      // so it stays inside the 3-second window.
+      const outcome = await watcher.press({ platform: "discord", chatId: channelId, messageId, authorId: author, ownerId, customId: custom });
+      const key = outcome === "answered" ? watcher.pendingKey({ platform: "discord", chatId: channelId, messageId }) : null;
+      return key ? { status: 200, body: modalPayload(`qwrite|${key}`, "Answer the question", "Your answer") } : { status: 200, body: { type: 6 } };
+    }
+    // The answer work happens after the response, so the 3-second ack window is never spent on it.
+    return { status: 200, body: { type: 6 }, after: () => watcher.press({ platform: "discord", chatId: channelId, messageId, authorId: author, ownerId, customId: custom }) };
+  }
+  return { status: 200, body: { type: 6 } };
+}
+
 export function startDiscordInteractions(input: {
   port: number;
   publicKeyHex: string;
@@ -56,29 +93,9 @@ export function startDiscordInteractions(input: {
         return new Response("invalid request signature", { status: 401 });
       }
       const interaction = JSON.parse(body) as DiscordInteraction;
-      if (interaction.type === 1) return Response.json({ type: 1 });
-
-      const author = interaction.member?.user?.id ?? interaction.user?.id ?? "";
-      const channelId = interaction.message?.channel_id ?? interaction.channel_id ?? "";
-      const messageId = interaction.message?.id ?? "";
-      const custom = interaction.data?.custom_id ?? "";
-
-      if (interaction.type === 5) {
-        // A modal submit carries the typed answer; the pending question is identified by the modal's
-        // custom id (`qwrite|<key>`), since the modal has no message of its own.
-        const key = custom.startsWith("qwrite|") ? custom.slice(7) : "";
-        const answer = modalAnswer(interaction.data?.components);
-        void input.watcher.pressTyped({ key, authorId: author, ownerId: input.ownerId, answer }).catch((error: unknown) => log(`MODAL_FAILED ${String(error)}`));
-        return Response.json({ type: 6 });
-      }
-
-      if (isComponent(interaction.data) && custom.startsWith("q|")) {
-        // The answer work happens after the response, so the 3-second ack window is never spent on it.
-        void input.watcher.press({ platform: "discord", chatId: channelId, messageId, authorId: author, ownerId: input.ownerId, customId: custom })
-          .catch((error: unknown) => log(`PRESS_FAILED ${String(error)}`));
-        return Response.json({ type: 6 });
-      }
-      return Response.json({ type: 6 });
+      const result = await discordInteractionResult({ interaction, watcher: input.watcher, ownerId: input.ownerId });
+      if (result.after) void result.after().catch((error: unknown) => log(`INTERACTION_FAILED ${String(error)}`));
+      return Response.json(result.body, { status: result.status });
     },
   });
   log(`discord interactions listening on :${input.port}`);

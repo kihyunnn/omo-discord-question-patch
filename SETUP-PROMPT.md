@@ -117,6 +117,16 @@ injection path is still only `send-text` + `send-keys enter`.
   `data.component_type` (2/3/4, string or number) or the `custom_id` prefix. Miss this and a button
   press falls through the slash-command path, no ack is sent, and the client shows
   "The application did not respond".
+- A **modal submit** is the worst case of that trap: the same rewrite happens, and it carries **no
+  `data.component_type`** and **no `message`** at all, so neither the numeric type nor a
+  `component_type` check can see it. Only the `custom_id` prefix survives, so route `qwrite|<key>` to
+  the modal handler by prefix *first*. A submit misrouted to the button handler is dropped with
+  "the question is already over" and the typed answer is lost *(measured: the "✍ Write your own"
+  answer silently vanished)*.
+- "✍ Write your own" opens a modal (interaction response type 9). A modal response **cannot** be a
+  deferred ack, so the write press must answer with the modal itself and keep that work synchronous and
+  tiny (record the target question, no I/O) to stay inside the 3-second window. The modal's
+  `custom_id` must carry the pending key, because the submit has no message to look the question up by.
 
 # The second cause of a late ack (a stalled event loop)
 

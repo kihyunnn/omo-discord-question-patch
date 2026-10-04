@@ -142,7 +142,10 @@ message 1:
 ```
 
 Pressing `production` injects that choice into the waiting prompt, and the message is edited to show
-the answer with the buttons disabled.
+the answer with the buttons disabled. Pressing `✍ Write your own` opens a Discord modal; the answer
+typed into it is injected the same way. The modal's `custom_id` carries the pending question's key
+(`qwrite|<key>`) because a modal submit has no message to match on, and the button press that opens it
+must be answered with the modal itself — a modal cannot be a deferred acknowledgement.
 
 ### 4. A multi-question set is split, never truncated
 
